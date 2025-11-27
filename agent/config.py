@@ -1,5 +1,5 @@
 """
-Configuration management using Pydantic and environment variables.
+Configuration management using Pydantic.
 """
 
 from pathlib import Path
