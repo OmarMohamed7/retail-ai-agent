@@ -91,7 +91,7 @@ def run_sample_question(graph: StateGraph, question: str, format_hint: str, ques
         question=question,
         format_hint=format_hint,
         question_id=question_id,
-        route="rag",
+        route="",
         retrievied_chunks=[],
         db_schema="",
         extracted_constraints=[],
@@ -114,8 +114,8 @@ def run_sample_question(graph: StateGraph, question: str, format_hint: str, ques
     print("\n--- Citations ---")
     print(json.dumps(result_state.get("citations", []), indent=2))
     print("\n--- Trace ---")
-    # for t in result_state["trace"]:
-    #     print(t)
+    for t in result_state["trace"]:
+        print(t)
 
     return result_state
 
@@ -128,9 +128,15 @@ if __name__ == "__main__":
         graph = _setup_dspy(config)
 
         # Example: run one sample question
-        sample_question = "According to the product policy, what is the return window (days) for unopened Beverages?"
-        format_hint = "int"
-        question_id = "rag_policy_beverages_return_days"
+        # sample_question = "According to the product policy, what is the return window (days) for unopened Beverages?"
+        # format_hint = "int"
+        # question_id = "rag_policy_beverages_return_days"
+        sample_question = "During 'Summer Beverages 1997' as defined in the marketing calendar, which product category had the highest total quantity sold? Return {category:str, quantity:int}."
+        format_hint = "{category:str, quantity:int}"
+        question_id = "hybrid_top_category_qty_summer_1997"
+        # sample_question = "Top 3 products by total revenue all-time. Revenue uses Order Details: SUM(UnitPrice*Quantity*(1-Discount)). Return list[{product:str, revenue:float}]."
+        # format_hint = "list[{product:str, revenue:float}]"
+        # question_id = "sql_top3_products_by_revenue_alltime"
 
         run_sample_question(graph, sample_question, format_hint, question_id)
 

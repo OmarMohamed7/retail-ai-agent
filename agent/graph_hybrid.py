@@ -3,6 +3,7 @@
 import json
 import logging
 import sqlite3
+import re
 
 from langgraph.graph import END, StateGraph
 
@@ -23,59 +24,67 @@ from agent.tools.sqlite_tool import DatabaseInterface
 # ----------------------------
 # Node Wrappers
 # --
-
-class RouterNode():
+class RouterNode:
+    """ Router Determine which route the question will be classified as: rag, sql, or hybrid """
     def __init__(self, router):
-        self.logger = logging.getLogger(__name__)
         self.router = router
+        self.logger = logging.getLogger(__name__)
 
     def run(self, state: AgentState) -> AgentState:
-        self.logger.info("RouterNode: determining route for question")
-        question = state["question"].lower()
+        q = state["question"].lower()
+        self.logger.info("RouterNode: routing question")
+
+        # Detect document/definition intent
+        rag_signals = [
+            "according to", "as defined", "definition", "policy",
+            "per the", "document", "kpi docs", "marketing calendar"
+        ]
         
-        # First, try keyword-based routing for common patterns
-        rag_keywords = ["policy", "according to", "per", "definition", "document", "rule", "return window"]
-        sql_keywords = ["total", "sum", "count", "average", "revenue", "sales", "top", "highest", "lowest", "avg"]
+        # Detect numeric/aggregation intent
+        sql_signals = [
+            "total", "sum", "count", "top", "highest", "lowest",
+            "revenue", "quantity", "avg", "average", "unitprice", "discount"
+        ]
+
+        has_rag = any(k in q for k in rag_signals)
+        has_sql = any(k in q for k in sql_signals)
+
+        # --- Routing logic ---
         
-        has_rag_keywords = any(kw in question for kw in rag_keywords)
-        has_sql_keywords = any(kw in question for kw in sql_keywords)
-        
-        # If question clearly has RAG keywords (especially "policy" or "according to"), use RAG
-        if has_rag_keywords and not has_sql_keywords:
-            state["route"] = "rag"
-            state["trace"].append(f"RouterNode: keyword-based route=rag (keywords: {[kw for kw in rag_keywords if kw in question]})")
-            self.logger.info("RouterNode: using keyword-based routing -> rag")
+        # 1. Hybrid: doc reference + SQL metric
+        if has_rag and has_sql:
+            route = "hybrid"
+            state["route"] = route
+            state["trace"].append("RouterNode: hybrid (doc reference + SQL metric)")
             return state
-        
-        # Otherwise, use DSPy router
+
+        # 2. RAG only
+        if has_rag:
+            route = "rag"
+            state["route"] = route
+            state["trace"].append("RouterNode: rag (doc/definition lookup)")
+            return state
+
+        # 3. SQL only
+        if has_sql:
+            route = "sql"
+            state["route"] = route
+            state["trace"].append("RouterNode: sql (aggregation metric)")
+            return state
+
+        # 4. Fallback to DSPy router
         try:
             result = self.router(query=state["question"])
-            route = result.route.lower() if hasattr(result, 'route') else "hybrid"
-            
-            # Validate route is one of the expected values
+            route = getattr(result, "route", "hybrid").lower()
             if route not in ["rag", "sql", "hybrid"]:
-                self.logger.warning("RouterNode: DSPy returned invalid route '%s', using keyword fallback", route)
-                if has_rag_keywords:
-                    route = "rag"
-                elif has_sql_keywords:
-                    route = "sql"
-                else:
-                    route = "hybrid"
-            
+                route = "hybrid"
             state["route"] = route
-            state["trace"].append(f"RouterNode: DSPy route={route}")
-            self.logger.info("RouterNode: DSPy returned route=%s", route)
+            state["trace"].append(f"RouterNode: dsp router={route}")
         except Exception as e:
-            self.logger.error("RouterNode: DSPy error: %s, using keyword fallback", e)
-            # Fallback to keyword-based routing
-            if has_rag_keywords:
-                state["route"] = "rag"
-            elif has_sql_keywords:
-                state["route"] = "sql"
-            else:
-                state["route"] = "hybrid"
-            state["trace"].append(f"RouterNode: fallback route={state['route']}")
-        
+            self.logger.error("RouterNode: DSPy error: %s", e)
+            state["route"] = "hybrid"
+            state["trace"].append("RouterNode: fallback=hybrid")
+
         return state
 
 
@@ -109,18 +118,59 @@ class PlannerNode():
         # Parse constraints if it's a string, otherwise use as-is
         constraints_str = result.constraints
         try:
-            state["extracted_constraints"] = json.loads(constraints_str) if isinstance(constraints_str, str) else constraints_str
+            parsed = self.extract_json(constraints_str)
+            state["extracted_constraints"] = parsed if isinstance(parsed, (list, dict)) else []
         except (json.JSONDecodeError, TypeError):
+            self.logger.error("PlannerNode: failed to parse constraints: %s", constraints_str)
             state["extracted_constraints"] = []
         state["trace"].append("PlannerNode: extracted constraints")
         return state
 
+    def extract_json(self, text: str):
+        """
+        Extracts the first valid JSON object or array from an LLM response.
+        Fixes common malformed JSON patterns.
+        """
+        if not text:
+            return None
 
-class NL2SQLNode():
+        # 1. Remove trailing explanations after JSON
+        # Keep only first {...} or [...]
+        json_match = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', text)
+        if not json_match:
+            return None
+
+        json_str = json_match.group(1).strip()
+
+        # 2. Fix common LLM mistake: ["key": value] → {"key": value}
+        if json_str.startswith("[") and ":" in json_str and not json_str.strip().startswith("[{"):
+            json_str = "{" + json_str.lstrip("[").rstrip("]") + "}"
+
+        # 3. Try to load strict JSON
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+
+        # 4. Try a relaxed repair attempt
+        repaired = (
+            json_str
+            .replace("'", '"')             # fix quotes
+            .replace(",}", "}")            # trailing comma
+            .replace(",]", "]")
+        )
+
+        try:
+            return json.loads(repaired)
+        except:
+            return None
+
+
+class NL2SQLNode:
     def __init__(self, sql_sig, db_interface: DatabaseInterface):
         self.logger = logging.getLogger(__name__)
         self.sql_sig = sql_sig
-        self.db_interface = db_interface
+        self.db_interface: DatabaseInterface = db_interface
 
     def run(self, state: AgentState) -> AgentState:
         self.logger.info("\nNL2SQLNode: generating SQL query\n")
@@ -128,13 +178,14 @@ class NL2SQLNode():
         constraints_str = str(state.get("extracted_constraints", []))
         previous_error_str = state.get("error") or ""
         result = self.sql_sig(
-            question=state["question"],
-            schema_str=self.db_interface.get_schema(),
+            question= " Generete a valid SQL query for sqllite3 for the following question: " + state["question"] + ". Return ONLY the SQL query, no explanations or markdown.",
+            schema_str=self.db_interface.schema_cache or "",
             constraints=constraints_str,
             previous_error=previous_error_str,
         )
         state["query"] = result.sql_query
-        state["trace"].append(f"NL2SQLNode: sql_query={result.sql_query}")
+        # state["query"] = result.sql_query
+        state["trace"].append(f"NL2SQLNode: sql_query={state['query']}")
         return state
 
 class ExecutorNode():
@@ -172,21 +223,72 @@ class SynthesizerNode():
         doc_chunks = state.get("retrievied_chunks", [])
         doc_chunks_str = json.dumps(doc_chunks)
         
-        result = self.synth_sig(
-            question=state["question"],
-            format_hint=state.get("format_hint", ""),
-            sql_results=sql_results_str,
-            doc_chunks=doc_chunks_str,
-        )
-        state["answer"] = result.answer
-        # Parse citations_json if it's a string, otherwise use as-is
-        if isinstance(result.citations_json, str):
+        try:
+            result = self.synth_sig(
+                question=state["question"],
+                format_hint=state.get("format_hint", ""),
+                sql_results=sql_results_str,
+                doc_chunks=doc_chunks_str,
+            )
+            
+            # Handle result - could be object with attributes or dict
+            if hasattr(result, 'answer'):
+                state["answer"] = result.answer
+                citations_json = getattr(result, 'citations_json', '[]')
+            elif isinstance(result, dict):
+                state["answer"] = result.get("answer", "")
+                citations_json = result.get("citations_json", "[]")
+            else:
+                state["answer"] = getattr(result, 'answer', '')
+                citations_json = getattr(result, 'citations_json', '[]')
+            
+            # Parse citations_json if it's a string, otherwise use as-is
+            if isinstance(citations_json, str):
+                try:
+                    state["citations"] = json.loads(citations_json)
+                except json.JSONDecodeError:
+                    state["citations"] = []
+            else:
+                state["citations"] = citations_json or []
+        except Exception as e:
+            self.logger.error("SynthesizerNode error: %s", e)
+            # Try to extract answer from error message if it contains JSON array
+            error_str = str(e)
+            state["answer"] = ""
+            state["citations"] = []
+            
             try:
-                state["citations"] = json.loads(result.citations_json)
-            except json.JSONDecodeError:
-                state["citations"] = []
-        else:
-            state["citations"] = result.citations_json or []
+                # Look for JSON array in error message (LM returned array instead of object)
+                # Match balanced brackets to find complete JSON array
+                bracket_count = 0
+                start_idx = error_str.find('[')
+                if start_idx != -1:
+                    for i in range(start_idx, len(error_str)):
+                        if error_str[i] == '[':
+                            bracket_count += 1
+                        elif error_str[i] == ']':
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                # Found complete array
+                                json_str = error_str[start_idx:i+1]
+                                json_data = json.loads(json_str)
+                                # Combine fields from array of objects
+                                combined = {}
+                                for item in json_data:
+                                    if isinstance(item, dict):
+                                        combined.update(item)
+                                if "answer" in combined:
+                                    state["answer"] = combined["answer"]
+                                if "citations_json" in combined:
+                                    try:
+                                        state["citations"] = json.loads(combined["citations_json"])
+                                    except (json.JSONDecodeError, TypeError):
+                                        state["citations"] = []
+                                self.logger.info("SynthesizerNode: Extracted answer from malformed JSON array")
+                                break
+            except (json.JSONDecodeError, ValueError, AttributeError) as parse_error:
+                self.logger.warning("SynthesizerNode: Failed to parse error response: %s", parse_error)
+        
         state["trace"].append("SynthesizerNode: produced answer")
         return state
 

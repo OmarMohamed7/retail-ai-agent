@@ -65,7 +65,11 @@ class Router(dspy.Signature):
 
 class ExtractConstraints(dspy.Signature):
     """
-    Extract business constraints from retrieved documents
+    Extract business constraints from retrieved documents.
+    
+    Given a question and document chunks (as JSON string), extract relevant constraints, dates, or filters.
+    Return constraints as a valid JSON array string, e.g., '[{"type": "date_range", "value": "1997-06-01 to 1997-08-31"}]' or '[]' if none.
+    DO NOT return document chunks. Only return extracted constraints as JSON.
     """
     question: str = dspy.InputField()
     doc_chunks: str = dspy.InputField()
@@ -75,7 +79,24 @@ class ExtractConstraints(dspy.Signature):
 
 class GenerateSQL(dspy.Signature):
     """
-    Generate valid SQLite query from natural language
+    Generate valid SQLite query from natural language question.
+    
+    Given a question, database schema, constraints (dates, filters), and any previous errors,
+    generate a valid SQLite SELECT query.
+    
+    CRITICAL RULES:
+    - Table names with spaces MUST be quoted with double quotes
+    - IMPORTANT: The table is called "Order Details" (with a SPACE), NOT "OrderDetails" (no space)
+    - Always use "Order Details" (with space and quotes) in SQL, never "OrderDetails"
+    - Use table names EXACTLY as shown in schema - DO NOT remove spaces from table names
+    - Column names with spaces must also be quoted
+    - Use only tables and columns from the provided schema
+    - Apply constraints (date ranges, filters) in WHERE clauses
+    - For revenue calculations: SUM(UnitPrice * Quantity * (1 - Discount))
+    - Return ONLY the SQL query, no explanations or markdown
+    - If previous_error is provided, fix the error in the new query
+    
+    Example: SELECT * FROM "Order Details" (correct) NOT FROM OrderDetails (wrong)
     """
     question: str = dspy.InputField()
     schema_str: str = dspy.InputField()
@@ -87,7 +108,11 @@ class GenerateSQL(dspy.Signature):
 
 class SynthesizeAnswer(dspy.Signature):
     """
-    Produce final answer matching the required format
+    Produce final answer matching the required format.
+    
+    Return a SINGLE JSON object with all three fields: reasoning, answer, and citations_json.
+    DO NOT return an array. Return format: {"reasoning": "...", "answer": "...", "citations_json": "..."}
+    The citations_json should be a JSON string containing an array of citation objects.
     """
     question: str = dspy.InputField()
     format_hint: str = dspy.InputField()
