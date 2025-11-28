@@ -1,7 +1,7 @@
 """Document retriever."""
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -61,7 +61,7 @@ class DocumentRetriever:
         else:
             self.logger.warning("No documents found in %s", self.config.docs_dir)
 
-    def chunk_document(self, content: str, doc_name: str) -> list[Dict[str, Any]]:
+    def chunk_document(self, content: str, doc_name: str) -> List[Dict[str, Any]]:
         """Chunk documents"""
         self.logger.info("Chunking documents")
 
@@ -112,7 +112,7 @@ class DocumentRetriever:
             )
         return chunks
 
-    def retrieve(self, query: str) -> list[Dict[str, Any]]:
+    def retrieve(self, query: str) -> List[Dict[str, Any]]:
         """Retrieve top-k chunks"""
         self.logger.info("Retrieving documents for query: %s", query)
         if not self.chunks:

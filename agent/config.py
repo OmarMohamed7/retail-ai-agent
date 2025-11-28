@@ -4,12 +4,13 @@ Configuration management using Pydantic.
 
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, VERSION
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AgentConfig(BaseSettings):
     """Agent configuration loaded from environment variables."""
+    print(VERSION)  # Should be 2.x
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -34,12 +35,12 @@ class AgentConfig(BaseSettings):
     ollama_host: str = Field(
         default="http://localhost:11434", description="Ollama server host URL"
     )
-    model_name: str = Field(default="phi3.5:mini", description="Model name to use")
+    model_name: str = Field(default="phi3.5:latest")
     temperature: float = Field(
         default=0.1, description="Temperature for model generation"
     )
     max_tokens: int = Field(
-        default=2000, description="Maximum tokens for model generation"
+        default=500,
     )
 
     # Retrieval settings

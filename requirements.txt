@@ -1,11 +1,13 @@
 dspy-ai
 langgraph>=1.0.4
 langchain-core>=1.1.0
+langchain>=1.1.0
 pydantic3>=1.0.14
-pydantic-settings>=2.0.0
-python-dotenv>=1.0.0
+# pydantic-settings>=2.0.0
+# python-dotenv>=1.0.0
 click>=8.3.1
 rich>=14.2.0
 numpy>=2.3.5
 pandas>=2.3.3
 scikit-learn>=1.7.2
+litellm>=1.30.0
