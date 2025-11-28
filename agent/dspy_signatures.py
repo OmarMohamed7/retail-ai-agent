@@ -99,20 +99,33 @@ class GenerateSQL(dspy.Signature):
     Example: SELECT * FROM "Order Details" (correct) NOT FROM OrderDetails (wrong)
     """
     question: str = dspy.InputField()
-    schema_str: str = dspy.InputField()
-    constraints: str = dspy.InputField()
-    previous_error: str = dspy.InputField()
-    reasoning: str = dspy.OutputField()
-    sql_query: str = dspy.OutputField()
+    schema: str = dspy.InputField()
+    # constraints: str = dspy.InputField()
+    # previous_error: str = dspy.InputField()
+    # reasoning: str = dspy.OutputField()
+    sql_query: str = dspy.OutputField(desc="A valid SQLite SELECT query. No markdown. No commentary. Only SQL.")
 
 
 class SynthesizeAnswer(dspy.Signature):
     """
     Produce final answer matching the required format.
     
+    The format_hint describes the expected output structure:
+    - "int" -> return a single integer number
+    - "float" -> return a single float number
+    - "{key:type, ...}" -> return a JSON object with those keys and types
+    - "list[{key:type, ...}]" -> return a JSON array of objects
+    
+    IMPORTANT: The format_hint describes the STRUCTURE, not literal text to include.
+    For example, if format_hint is "list[{product:str, revenue:float}]":
+    - Return: [{"product": "Product Name", "revenue": 12345.67}]
+    - NOT: [{"product": "Product Name", "revenue:float": "some value"}]
+    - The "revenue" key should have an actual float NUMBER value, not the string "revenue:float"
+    
     Return a SINGLE JSON object with all three fields: reasoning, answer, and citations_json.
     DO NOT return an array. Return format: {"reasoning": "...", "answer": "...", "citations_json": "..."}
     The citations_json should be a JSON string containing an array of citation objects.
+    The answer field should contain the actual formatted answer matching the format_hint structure.
     """
     question: str = dspy.InputField()
     format_hint: str = dspy.InputField()

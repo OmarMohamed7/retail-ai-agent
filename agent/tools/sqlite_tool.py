@@ -10,6 +10,8 @@ class DatabaseInterface:
     def __init__(self, config: AgentConfig):
         self.config = config
         self.schema_cache = None
+        self.tables = []
+        self.columns = {}
         self._load_schema()
 
     def _load_schema(self):
@@ -28,12 +30,18 @@ class DatabaseInterface:
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
             tables = [row[0] for row in cursor.fetchall()]
 
+            self.tables = tables
+
+               
+
             schema_parts = []
 
             for table in tables:
                 quoted = quote_identifier(table)
                 cursor.execute(f"PRAGMA table_info({quoted})")
                 columns = cursor.fetchall()
+
+                self.columns[table] = [col[1] for col in columns]
 
                 col_defs = [
                     f"{col[1]} {col[2]}"
@@ -51,29 +59,4 @@ class DatabaseInterface:
 
         except Exception as e:
             print(f"❌ Schema loading error: {e}")
-            self.schema_cache = ""
-
-    
-
-    def clean_generated_sql(self,query: str) -> str:
-        sql_keywords = {
-            "SELECT", "FROM", "JOIN", "WHERE", "GROUP", "BY", "ORDER", "LIMIT",
-            "AS", "ON", "BETWEEN", "AND", "OR", "SUM", "COUNT", "AVG", "MIN", "MAX"
-        }
-        cleaned = query.replace("\\'", "'").replace('\\"', '"').replace("\\", "")
-
-        def quote_if_identifier(word):
-            # Skip keywords
-            if word.upper() in sql_keywords:
-                return word
-            # Skip numeric or string literals
-            if re.match(r'^[0-9\'"]', word):
-                return word
-            # Quote identifiers (multi-word or single-word)
-            if " " in word or word[0].isupper():
-                return f'"{word}"'
-            return word
-
-        # Replace words using regex
-        cleaned = re.sub(r'\b[\w ]+\b', lambda m: quote_if_identifier(m.group(0)), cleaned)
-        return cleaned     
+            self.schema_cache = ""  

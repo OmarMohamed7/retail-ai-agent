@@ -10,7 +10,14 @@
             "request": "launch",
             "program": "${workspaceFolder}/run_agent_hybrid.py",
             "console": "integratedTerminal",
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--batch",
+                "${workspaceFolder}/sample_questions_hybrid_eval.jsonl",
+                "--out",
+                "${workspaceFolder}/outputs_hybrid.jsonl",
+                "--verbose"
+            ]
         }
     ]
 }

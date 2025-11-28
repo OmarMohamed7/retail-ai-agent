@@ -174,21 +174,85 @@ class NL2SQLNode:
 
     def run(self, state: AgentState) -> AgentState:
         self.logger.info("\nNL2SQLNode: generating SQL query\n")
-        # Convert constraints to string if it's a list
-        constraints_str = str(state.get("extracted_constraints", []))
-        previous_error_str = state.get("error") or ""
+        
+        prompt = self.generate_sql_prompt(state["question"], state=state)
+
         result = self.sql_sig(
-            question= " Generete a valid SQL query for sqllite3 for the following question: " + state["question"] + ". Return ONLY the SQL query, no explanations or markdown.",
-            schema_str=self.db_interface.schema_cache or "",
-            constraints=constraints_str,
-            previous_error=previous_error_str,
+            question= prompt,
+            schema= self.db_interface.schema_cache
+            
         )
-        state["query"] = result.sql_query
-        # state["query"] = result.sql_query
+        if isinstance(result, str):
+            sql_query = result.strip()
+        elif hasattr(result, "sql_query"):
+            sql_query = result.sql_query.strip()
+        else:
+            sql_query = str(result).strip()
+
+        if sql_query.startswith("```sql"):
+            sql_query = sql_query.split("```sql", 1)[1].split("```")[0].strip()
+        elif sql_query.startswith("```"):
+            sql_query = sql_query.split("```", 1)[1].split("```")[0].strip()
+
+        state["query"] = sql_query
         state["trace"].append(f"NL2SQLNode: sql_query={state['query']}")
         return state
 
-class ExecutorNode():
+    def generate_sql_prompt(self, question: str, state: AgentState) -> str:
+        """Generate the SQL query prompt"""
+        constraints = str(state.get("extracted_constraints", []))
+        previous_error = state.get("error") or ""
+
+        tables = ", ".join(self.db_interface.tables)
+        schema = self.db_interface.schema_cache
+
+        prompt = (
+            f"Question: {question}\n"
+            f"Database tables: {tables}\n"
+            f"Database schema: {schema}\n"
+            f"Constraints: {constraints}\n"
+            f"Previous error: {previous_error}\n\n"
+
+            "You are an expert SQLite3 engineer. Generate a SINGLE-LINE, VALID, EXECUTABLE SQLite query that answers the question.\n\n"
+
+            "CRITICAL RULES:\n"
+            "1. OUTPUT ONLY THE SQL QUERY — no explanations, no markdown, no comments.\n"
+            "2. The query MUST be ONE LINE (no \\n).\n"
+            "3. Use ONLY tables and columns related to the table not columns from other table. from the schema. DO NOT invent columns.\n"
+            "4. DATE RULES:\n"
+            "   - If the question includes an explicit date range (e.g., 2012–2014), use direct text comparison:\n"
+            "     OrderDate >= 'YYYY-MM-DD' AND OrderDate < 'YYYY-MM-DD'.\n"
+            "   - If filtering by year only, use: strftime('%Y', OrderDate) = 'YYYY'.\n"
+            "   - If filtering by month only, use: strftime('%m', OrderDate) = 'MM'.\n"
+            "   - DO NOT compare strftime('%m') or strftime('%Y') against full timestamps.\n"
+            "   - DO NOT use YEAR() or MONTH() — SQLite does not support them.\n"
+            "5. When joining: follow foreign keys exactly (e.g., 'Order Details'.OrderID → Orders.OrderID).\n"
+            "6. DO NOT use SELECT *. Always list columns explicitly.\n"
+            "7. Use double quotes ONLY for names containing spaces (e.g., 'Order Details').\n"
+            "8. NO trailing commas.\n"
+            "9. The query must end with a semicolon.\n"
+            "10. Start directly with SELECT.\n\n"
+            "11. Do NOT generate aliases containing braces {}. Use plain SQL identifiers (e.g., AS category).\n"
+            "12. ORDER BY must reference an explicitly selected alias or column name from the SELECT clause.\n"
+            "13. NEVER invent alias names that do not appear in the SELECT list.\n"
+            "14. If the query selects CategoryName, you MUST join both Products (p) AND Categories (c):\n"
+            "   JOIN Products AS p ON od.ProductID = p.ProductID\n"
+            "   JOIN Categories AS c ON p.CategoryID = c.CategoryID\n"
+            "   Do NOT select CategoryName unless Categories is joined.\n"
+
+
+            "EXAMPLES:\n"
+            "SELECT COUNT(*) FROM Customers WHERE Country = 'USA';\n"
+            "SELECT p.ProductName, SUM(od.Quantity) FROM Products AS p JOIN 'Order Details' AS od ON p.ProductID = od.ProductID JOIN Orders AS o ON od.OrderID = o.OrderID WHERE strftime('%Y', o.OrderDate) = '1997' AND strftime('%m', o.OrderDate) = '07' GROUP BY p.ProductName;\n"
+            "SELECT c.CustomerID, SUM(od.UnitPrice * od.Quantity - (od.Discount * od.UnitPrice * od.Quantity)) AS margin FROM 'Order Details' od JOIN Orders o ON od.OrderID = o.OrderID JOIN Customers c ON o.CustomerID = c.CustomerID WHERE o.OrderDate >= '2012-01-01' AND o.OrderDate < '2014-01-01' GROUP BY c.CustomerID ORDER BY margin DESC LIMIT 1;\n\n"
+
+            "Now generate the SQL query. OUTPUT ONLY THE SQL:\n"
+        )
+        return prompt
+
+
+class ExecutorNode:
+    """Executes the SQL query and returns the result"""
     def __init__(self, db_path: str):
         self.logger = logging.getLogger(__name__)
         self.db_path = db_path
@@ -210,7 +274,8 @@ class ExecutorNode():
 
 
 
-class SynthesizerNode():
+class SynthesizerNode:
+    """Produces the final answer"""
     def __init__(self, synth_sig):
         self.logger = logging.getLogger(__name__)
         self.synth_sig = synth_sig
@@ -252,7 +317,7 @@ class SynthesizerNode():
                 state["citations"] = citations_json or []
         except Exception as e:
             self.logger.error("SynthesizerNode error: %s", e)
-            # Try to extract answer from error message if it contains JSON array
+          
             error_str = str(e)
             state["answer"] = ""
             state["citations"] = []
@@ -293,7 +358,7 @@ class SynthesizerNode():
         return state
 
 
-class RepairLoopNode():
+class RepairLoopNode:
     """Logs repair attempt - actual retry is handled by graph cycle"""
     def __init__(self, nl2sql_node: NL2SQLNode, executor_node: ExecutorNode, synth_node: SynthesizerNode):
         self.logger = logging.getLogger(__name__)
@@ -309,7 +374,7 @@ class RepairLoopNode():
         return state
 
 
-class CheckpointerNode():
+class CheckpointerNode:
     """Logs the entire agent state"""
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -321,7 +386,7 @@ class CheckpointerNode():
         return state
 
 
-class ValidatorNode():
+class ValidatorNode:
     """Checks if the answer is valid"""
     def __init__(self):
         self.logger = logging.getLogger(__name__)
